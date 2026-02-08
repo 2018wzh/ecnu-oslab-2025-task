@@ -62,7 +62,7 @@ static uint32 device_null_write(uint32 len, uint64 src, bool is_user_src)
 /* 彩蛋: 笨蛋GPT */
 static uint32 device_gpt0_write(uint32 len, uint64 src, bool is_user_src)
 {
-	char tmp[STR_MAXLEN + 1];
+	char tmp[128];
 	proc_t *p = myproc();
 
 	tmp[len] = '\0';

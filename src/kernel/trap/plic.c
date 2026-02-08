@@ -3,16 +3,23 @@
 // PLIC初始化
 void plic_init()
 {
-    // 设置UART中断优先级
-    *(uint32 *)(PLIC_PRIORITY(UART_IRQ)) = 1;
+// 开发板用不到则两个设备中断, 而是用忙等方法驱动UART和SDIO
+#ifndef VISIONFIVE2
+    // 设置UART和VIRTIO中断优先级
+    *(uint32*)(PLIC_PRIORITY(UART_IRQ)) = 1;
+    *(uint32*)(PLIC_PRIORITY(VIRTIO_IRQ)) = 1;
+#endif
 }
 
 // PLIC核心初始化
 void plic_inithart()
 {
+// 开发板用不到则两个设备中断, 而是用忙等方法驱动UART和SDIO
     int hartid = mycpuid();
+#ifndef VISIONFIVE2
     // 使能中断开关
-    *(uint32 *)PLIC_SENABLE(hartid) = (1 << UART_IRQ);
+    *(uint32 *)PLIC_SENABLE(hartid) = ((1 << UART_IRQ) | (1 << VIRTIO_IRQ));
+#endif
     // 设置响应阈值
     *(uint32 *)PLIC_SPRIORITY(hartid) = 0;
 }

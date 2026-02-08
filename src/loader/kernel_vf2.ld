@@ -3,7 +3,8 @@ ENTRY( _entry )
 
 SECTIONS
 {
-  . = 0x80000000;
+  /* opensbi默认工作在0x40000000, 它执行完成后会跳转到0x40200000 */
+  . = 0x40200000;
 
   .text : {
     *(.text .text.*)
@@ -38,5 +39,5 @@ SECTIONS
 
   . = ALIGN(4096);
   PROVIDE(ALLOC_BEGIN = .);
-  PROVIDE(ALLOC_END = 0x80000000 + 128M);
+  PROVIDE(ALLOC_END = 0x40000000 + 128M);
 }

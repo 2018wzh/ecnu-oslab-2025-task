@@ -6,6 +6,12 @@ void virtio_disk_init();
 void virtio_disk_rw(buffer_t *b, bool write);
 void virtio_disk_intr();
 
+/* sdio.c: 以block为单位的SD卡读写能力 */
+
+void sdio_disk_init();
+void sdio_disk_rw(buffer_t *b, bool write);
+void sdio_disk_test();
+
 /* buffer.c: 以buffer为中介沟通内存和磁盘 */
 
 void buffer_init();

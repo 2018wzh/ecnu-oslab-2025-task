@@ -72,7 +72,7 @@ typedef struct inode_disk {
     short minor;                             // 次设备号
     short nlink;                             // 链接数
     unsigned int size;                       // 文件数据长度(字节)
-    unsigned int index[INODE_INDEX_3]; // 数据存储位置(10+2+1)
+    unsigned int index[INODE_INDEX_3];       // 数据存储位置(10+2+1)
 } inode_disk_t;
 
 
@@ -92,7 +92,7 @@ typedef struct dentry {
 
 // 文件系统常量定义
 #define BLOCK_SIZE       4096                 // 块的大小与页面大小保持一致
-#define N_DATA_BLOCK     (5 * 512 * 512)      // 数据区域设为 5GB
+#define N_DATA_BLOCK     (1 * 512 * 512)      // 数据区域设为 1GB
 #define N_INODE          (1 << 16)            // 文件数量上限设为 65536个
 #define ROOT_INODE_NUM   0                    // 根目录的inode序号
 

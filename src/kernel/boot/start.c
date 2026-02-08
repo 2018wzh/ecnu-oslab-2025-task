@@ -2,33 +2,30 @@
 #include "../trap/mod.h"
 
 // 每个CPU在运行操作系统时需要一个初始的函数栈
-__attribute__((aligned(16))) uint8 CPU_stack[4096 * NCPU];
+__attribute__((aligned(16))) uint8 CPU_stack[4096 * N_CPU];
 
 extern void main();
 
-void start()
+static void trap_handler_loop()
+{
+    while (1);    
+}
+
+// OpenSBI会传递hartid和设备树信息
+void start(uint64 hartid, uint64 dtb_entry)
 {
     // 暂时不开启分页，使用物理地址
     w_satp(0);
 
-    // 切换到S-mode后无法访问M-mode的寄存器
-    // 所以需要将hartid存到可访问的寄存器tp
-    // 之后可以用mycpuid函数访问它
-    int id = r_mhartid();
-    w_tp(id);
+    // 将hartid存储到tp寄存器中
+    w_tp(hartid);
 
-    // 委托S-mode处理所有trap
+    // 打开S-mode所有中断
+    w_sie(r_sie() | SIE_SEIE | SIE_STIE | SIE_SSIE);
 
-    // 时钟中断初始化 (唯一需要在M-mode处理的中断)
+    // 暂时将trap响应程序设为死循环, 等待trap初始化
+    w_stvec((uint64)trap_handler_loop);
 
-    // 修改mstatus寄存器，假装上一个状态是S-mode
-    uint64 status = r_mstatus();
-    status &= ~MSTATUS_MPP_MASK;
-    status |= MSTATUS_MPP_S;
-    w_mstatus(status);
-
-    // 设置M-mode的返回地址
-
-    // 触发状态迁移，回到上一个状态（M-mode->S-mode）
-
+    // 直接进入main函数
+    main();
 }

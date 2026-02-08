@@ -128,7 +128,7 @@ static int alloc3_desc(int *idx)
 /* 基于buffer的block读写操作 */
 void virtio_disk_rw(buffer_t *b, bool write)
 {
-    uint64 sector = b->block_num * (BLOCK_SIZE / 512);
+    uint64 sector = b->block_num * (BLOCK_SIZE / SECTOR_SIZE);
 
     spinlock_acquire(&disk.vdisk_lock);
 

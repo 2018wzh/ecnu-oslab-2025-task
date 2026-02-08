@@ -84,9 +84,224 @@ typedef struct disk {
 #define VIRTIO_RING_F_INDIRECT_DESC 28
 #define VIRTIO_RING_F_EVENT_IDX 29
 
+/*----------------------关于SD卡(SDIO)----------------------*/
+
+/*
+    以下内容参考Ailen实现的SD卡驱动, 有一些小的修改
+    https://github.com/os-module/visionfive2-sd/tree/main
+*/
+
+// === 寄存器基地址与偏移 ===
+#define SDIO_BASE               0x16020000UL
+
+#define CTRL_REG                (SDIO_BASE + 0x00)
+#define POWER_REG               (SDIO_BASE + 0x04)
+#define CLK_DIVIDER_REG         (SDIO_BASE + 0x08)
+#define CLOCK_ENABLE_REG        (SDIO_BASE + 0x10)
+#define CTYPE_REG               (SDIO_BASE + 0x18)
+#define BLK_SIZE_REG            (SDIO_BASE + 0x1C)
+#define BYTE_CNT_REG            (SDIO_BASE + 0x20)
+#define ARG_REG                 (SDIO_BASE + 0x28)
+#define CMD_REG                 (SDIO_BASE + 0x2C)
+#define RESP0_REG               (SDIO_BASE + 0x30)
+#define RESP1_REG               (SDIO_BASE + 0x34)
+#define RESP2_REG               (SDIO_BASE + 0x38)
+#define RESP3_REG               (SDIO_BASE + 0x3C)
+#define RAW_INT_STATUS_REG      (SDIO_BASE + 0x44)
+#define STATUS_REG              (SDIO_BASE + 0x48)
+#define CDETECT_REG             (SDIO_BASE + 0x50)
+#define BUS_MODE_REG            (SDIO_BASE + 0x80)
+#define DBADDRL_REG             (SDIO_BASE + 0x88)
+#define DBADDRU_REG             (SDIO_BASE + 0x8C)
+#define FIFO_DATA_REG           (SDIO_BASE + 0x600)
+
+// === 内存映射 I/O 宏 ===
+#define REG32(addr) (*(volatile uint32*)(addr))
+#define REG64(addr) (*(volatile uint64*)(addr))
+
+// === StatusReg ===
+#define STATUS_DATA_BUSY(val)           (((val) >> 9) & 1U)
+#define STATUS_FIFO_COUNT(val)          (((val) >> 17) & 0x1FFFU)
+
+// === RawInterruptStatusReg ===
+#define RAW_INT_INT_STATUS(val)         ((uint16)((val) & 0xFFFFU))
+
+// === RawInterrupt (u16, MSB-first) ===
+#define RAW_INTR_COMMAND_DONE(val)      (((val) >> 2) & 1U)
+#define RAW_INTR_RXDR(val)              (((val) >> 5) & 1U)
+#define RAW_INTR_TXDR(val)              (((val) >> 4) & 1U)
+#define RAW_INTR_DTO(val)               (((val) >> 3) & 1U)
+#define RAW_INTR_RTO(val)               (((val) >> 8) & 1U)
+#define RAW_INTR_DCRC(val)              (((val) >> 7) & 1U)
+#define RAW_INTR_RESPONSE_ERR(val)      (((val) >> 1) & 1U)
+#define RAW_INTR_DRTO(val)              (((val) >> 9) & 1U)
+#define RAW_INTR_SBE(val)               (((val) >> 13) & 1U)
+#define RAW_INTR_EBE(val)               (((val) >> 15) & 1U)
+
+static inline bool raw_interrupt_have_error(uint16 intr) {
+    return RAW_INTR_RTO(intr) || RAW_INTR_DCRC(intr) ||
+           RAW_INTR_RESPONSE_ERR(intr) || RAW_INTR_DRTO(intr) ||
+           RAW_INTR_SBE(intr) || RAW_INTR_EBE(intr);
+}
+
+// === CmdReg 构建 ===
+typedef uint32 CmdReg;
+
+// pub struct CmdReg {
+//     pub start_cmd: bool,                // bit 31
+//     reserved: bool,                     // bit 30
+//     pub use_hold_reg: bool,             // bit 29
+//     pub volt_switch: bool,              // bit 28
+//     pub boot_mode: bool,                // bit 27
+//     pub disable_boot: bool,             // bit 26
+//     pub expect_boot_ack: bool,          // bit 25
+//     pub enable_boot: bool,              // bit 24
+//     pub ccs_expected: bool,             // bit 23
+//     pub read_ceata_device: bool,        // bit 22
+//     pub update_clock_registers_only: bool, // bit 21
+//     #[bits(5)]
+//     pub card_number: u16,               // bits 20–16
+//     pub send_initialization: bool,      // bit 15
+//     pub stop_abort_cmd: bool,           // bit 14
+//     pub wait_prvdata_complete: bool,    // bit 13
+//     pub send_auto_stop: bool,           // bit 12
+//     pub transfer_mode: bool,            // bit 11
+//     pub transfer_dir: bool,             // bit 10
+//     pub data_expected: bool,            // bit 9
+//     pub check_response_crc: bool,       // bit 8
+//     pub response_length: bool,          // bit 7
+//     pub response_expect: bool,          // bit 6
+//     #[bits(6)]
+//     pub cmd_index: u16,                 // bits 5–0
+// }
+
+// impl CmdReg {
+//     pub fn default(card_number: usize, cmd_number: u8) -> Self {
+//         CmdReg::new()
+//             .with_start_cmd(true)
+//             .with_use_hold_reg(true)
+//             .with_response_expect(true)
+//             .with_wait_prvdata_complete(true)
+//             .with_check_response_crc(true)
+//             .with_card_number(card_number as u16)
+//             .with_cmd_index(cmd_number as u16)
+//     }
+//     pub fn with_no_data(card_number: usize, cmd_number: u8) -> Self {
+//         CmdReg::default(card_number, cmd_number)
+//     }
+
+//     pub fn with_data(card_number: usize, cmd_number: u8) -> Self {
+//         CmdReg::default(card_number, cmd_number).with_data_expected(true)
+//     }
+// }
+
+static inline CmdReg cmd_reg_default(unsigned int card_number, uint8 cmd_index)
+{
+    CmdReg reg = 0;
+    reg |= (1U << 31);                          // start_cmd
+    reg |= (1U << 29);                          // use_hold_reg
+    reg |= (1U << 13);                          // wait_prvdata_complete
+    reg |= (1U << 8);                           // check_response_crc
+    reg |= (1U << 6);                           // response_expect
+    reg |= ((card_number & 0x1FU) << 16);       // card_number [20:16]
+    reg |= (cmd_index & 0x3FU);                 // cmd_index [5:0]
+    return reg;
+}
+
+static inline CmdReg cmd_reg_with_no_data(unsigned int card_number, uint8 cmd_index)
+{
+    return cmd_reg_default(card_number, cmd_index);
+}
+
+static inline CmdReg cmd_reg_with_data(unsigned int card_number, uint8 cmd_index)
+{
+    CmdReg reg = cmd_reg_default(card_number, cmd_index);
+    reg |= (1U << 9);  // set bit 9 (data_expected)
+    return reg;
+}
+
+// === 命令枚举 ===
+typedef enum {
+    CMD_GO_IDLE_STATE = 0,
+    CMD_ALL_SEND_CID = 2,
+    CMD_SEND_RELATIVE_ADDR = 3,
+    CMD_SELECT_CARD = 7,
+    CMD_SEND_IF_COND = 8,
+    CMD_APP_CMD = 55,
+    CMD_SEND_CSD = 9,
+    CMD_SD_SEND_OP_COND = 41,
+    CMD_SEND_SCR = 51,
+    CMD_READ_SINGLE_BLOCK = 17,
+    CMD_WRITE_SINGLE_BLOCK = 24,
+    CMD_RESET_CLOCK = 111, // private 便于调试
+} Cmd;
+
+// impl From<Cmd> for CmdReg {
+//     fn from(value: Cmd) -> Self {
+//         match value {
+//             Cmd::GoIdleState => {
+//                 CmdReg::with_no_data(0, value.into()).with_send_initialization(true)
+//             }
+//             Cmd::SendIfCond | Cmd::AppCmd | Cmd::SendRelativeAddr | Cmd::SelectCard => {
+//                 CmdReg::with_no_data(0, value.into())
+//             }
+//             Cmd::SdSendOpCond => {
+//                 CmdReg::with_no_data(0, value.into()).with_check_response_crc(false)
+//             }
+//             Cmd::SendCsd => CmdReg::with_no_data(0, value.into()).with_check_response_crc(false),
+//             Cmd::AllSendCid => CmdReg::with_no_data(0, value.into())
+//                 .with_check_response_crc(false)
+//                 .with_response_length(true),
+//             Cmd::SendScr | Cmd::ReadSingleBlock => CmdReg::with_data(0, value.into()),
+//             Cmd::WriteSingleBlock => CmdReg::with_data(0, value.into()).with_transfer_dir(true),
+//             _ => {
+//                 panic!("Not implemented")
+//             }
+//         }
+//     }
+// }
+
+// 根据命令类型构建 CmdReg（与 Rust From<Cmd> for CmdReg 一致）
+static inline CmdReg cmd_reg_from_cmd(Cmd cmd)
+{
+    switch (cmd)
+    {
+        case CMD_GO_IDLE_STATE:
+            // set bit 15 (send initialization)
+            return ((cmd_reg_with_no_data(0, cmd) | (1U << 15)));
+ 
+        case CMD_ALL_SEND_CID:
+            // set bit 7 (response length) + clear bit 8 (check response crc)
+            return ((cmd_reg_with_no_data(0, cmd) | (1U << 7)) & ~(1U << 8));
+
+        case CMD_SEND_RELATIVE_ADDR:
+        case CMD_SELECT_CARD:
+        case CMD_SEND_IF_COND:
+        case CMD_APP_CMD:
+            return (cmd_reg_with_no_data(0, cmd));
+
+        case CMD_SEND_CSD:
+        case CMD_SD_SEND_OP_COND:
+            // clear bit 8 (check response crc)
+            return (cmd_reg_with_no_data(0, cmd) & ~(1U << 8));
+
+        case CMD_SEND_SCR:
+        case CMD_READ_SINGLE_BLOCK:
+            return cmd_reg_with_data(0, cmd);
+
+        case CMD_WRITE_SINGLE_BLOCK:
+            // set bit 10 (transfer_dir)
+            return cmd_reg_with_data(0, cmd) | (1U << 10);
+
+        default:
+            return 0;
+    }
+}
+
 /*-------------------关于块缓冲区--------------------*/
 
-#define BLOCK_SIZE 4096              // 基本管理单位的大小
+#define SECTOR_SIZE 512              // 基本读写单位(Sector)的大小
+#define BLOCK_SIZE 4096              // 基本管理单位(Block)的大小
 #define N_BUFFER_TEST 8              // 测试时的N_BUFFER取值
 #define N_BUFFER (32 * 512)          // 最多可以用32MB内存空间(25%)作为Block缓冲区
 #define BLOCK_NUM_UNUSED 0xFFFFFFFF  // 未使用的Buffer需要将block_num设为这个值

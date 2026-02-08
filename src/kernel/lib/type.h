@@ -29,7 +29,7 @@
 #define ReadReg(reg) (*(Reg(reg)))
 #define WriteReg(reg, v) (*(Reg(reg)) = (v))
 
-// UART 相关
+// UART的基准地址空间和中断号
 #define UART_BASE 0x10000000ul
 #define UART_IRQ 10
 

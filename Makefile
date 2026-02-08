@@ -14,13 +14,20 @@ MKFSPath   = src/mkfs
 LoaderPath = src/loader
 
 # 链接脚本
-KERNEL_LD = $(LoaderPath)/kernel.ld
+KERNEL_QEMU_LD = $(LoaderPath)/kernel_qemu.ld
+KERNEL_VF2_LD = $(LoaderPath)/kernel_vf2.ld
 USER_LD   = $(LoaderPath)/user.ld
 
 # 定义目标文件路径
-ELFKernel  = $(TARGET)/kernel/kernel-qemu.elf
-ELFUser    = $(UserPath)/initcode.h
-DISKIMG    = $(TARGET)/mkfs/disk.img
+ELFKernelQEMU = $(TARGET)/kernel/kernel_qemu.elf
+ELFKernelVF2 = $(TARGET)/kernel/kernel_vf2.elf
+NakedKernel = $(TARGET)/kernel/kernel_vf2.bin
+ELFUserInit = $(UserPath)/initcode.h
+DISKIMG     = $(TARGET)/mkfs/disk.img
+
+# 目标SD卡即内核镜像偏移量 (开发板模式使用)
+SDcard = /dev/sdb     # SD卡的设备地址, 按照实际情况修改 (如果SD卡内有文件系统, 建议先全盘格式化)
+KERNEL_OFFSET = 20480 # 前20GB供disk.img使用, 从这里开始存放kernel.bin (bs=1M)
 
 # 收集内核源文件 (.c .S，包括子目录)
 KernelSourceFile = $(wildcard $(KernelPath)/*.c) $(wildcard $(KernelPath)/*.S)
@@ -45,7 +52,7 @@ USER_TEST_ELF = $(USER_TEST_C:$(UserPath)/%.c=$(TARGET)/user/%.elf)
 
 # QEMU 模拟器配置
 QEMU     = qemu-system-riscv64
-QEMUOPTS = -machine virt -bios none -kernel $(ELFKernel)
+QEMUOPTS = -machine virt -bios default -kernel $(ELFKernelQEMU)
 QEMUOPTS += -m 128M -smp $(CPUNUM) -nographic
 QEMUOPTS += -drive file=$(DISKIMG),if=none,format=raw,id=x0
 QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
@@ -100,33 +107,65 @@ $(TARGET)/user/%.elf: $(TARGET)/user/%.o $(USER_LIB_OBJ)
 	$(LD) $(LDFLAGS) -T $(USER_LD) $< $(USER_LIB_OBJ) -o $@
 
 # 生成 initcode.h（供内核嵌入）
-$(ELFUser): $(USER_INIT_OBJ)
+$(ELFUserInit): $(USER_INIT_OBJ)
 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $(TARGET)/user/initcode.out $<
 	$(OBJCOPY) -S -O binary $(TARGET)/user/initcode.out $(TARGET)/user/initcode
-	xxd -i $(TARGET)/user/initcode > $(ELFUser)
+	xxd -i $(TARGET)/user/initcode > $(ELFUserInit)
 
-# 生成 kernel-qemu.elf
-$(ELFKernel): $(KernelOBJ)
-	$(LD) $(LDFLAGS) -T $(KERNEL_LD) $^ -o $@
+# 生成 kernel_qemu.elf (供QEMU使用)
+$(ELFKernelQEMU): $(KernelOBJ)
+	$(LD) $(LDFLAGS) -T $(KERNEL_QEMU_LD) $^ -o $@
+
+# 生成 kernel_vf2.elf (供开发板使用)
+$(ELFKernelVF2): $(KernelOBJ)
+	$(LD) $(LDFLAGS) -T $(KERNEL_VF2_LD) $^ -o $@
+
+# 生成 kernel_vf2.bin (供开发板使用)
+$(NakedKernel): $(ELFKernelVF2)
+	$(OBJCOPY) -O binary $< $@
 
 # 生成磁盘映像（包含所有普通用户程序）
 $(DISKIMG): $(USER_TEST_ELF)
 	gcc -Werror -Wall -I. -o $(TARGET)/mkfs/mkfs $(MKFSPath)/mkfs.c
 	$(TARGET)/mkfs/mkfs $@ $(USER_TEST_ELF)
 
-# 构建目标
-.PHONY: build
-build: $(TARGET) $(ELFUser) $(USER_TEST_ELF) $(ELFKernel) $(DISKIMG)
-	@echo "===== make success! ====="
+# 构建目标 (QEMU)
+.PHONY: qemu
+qemu: $(TARGET) $(ELFUserInit) $(USER_TEST_ELF) $(ELFKernelQEMU) $(DISKIMG)
+	@echo "===== make qemu success! ====="
 
-# 运行目标
+# 执行内核 (QEMU)
 .PHONY: run
-run: build
+run: qemu
 	$(QEMU) $(QEMUOPTS)
+
+# 构建目标 (开发板)
+.PHONY: vf2
+vf2: CFLAGS += -DVISIONFIVE2 # 相当于 define VISIONFIVE2 启动条件编译
+vf2: $(TARGET) $(ELFUserInit) $(USER_TEST_ELF) $(ELFKernelVF2) $(NakedKernel) $(DISKIMG)
+	@echo "===== make visionfive2 success! ====="
+
+# 准备包含文件系统初始状态和内核镜像的SD卡 (开发板)
+# SD卡布局: [disk.img] [空闲] [kernel_vf2.bin] [空闲]
+.PHONY: sdcard
+sdcard: vf2
+	sudo dd if=$(DISKIMG) of=$(SDcard) bs=1M conv=fsync status=progress
+	sudo dd if=$(NakedKernel) of=$(SDcard) bs=1M seek=$(KERNEL_OFFSET) conv=fsync status=progress
+	sync
+	@echo "===== prepare sdcard success! ======"
+
+# SD卡准备完成后的操作
+# 1. 将SD卡插入开发板, 使用TTL-to-USB转接器连接开发板的GPIO与主机, 通过putty.exe建立串口连接
+# 2. 连接开发板电源, 以1-bit QSPI Nor Flash模式(默认)启动开发板(连续点击两次重启键)
+# 3. 等待Uboot和OpenSBI完成一系列初始化(能看到一些输出, 大约15s后进入类似shell的地方)
+# 2. 输入 “mmc dev 1” 切换到SD卡
+# 3. 输入 "mmc read 40200000 2800000 1000" 加载SD卡中的kernel.bin到目标内存位置
+#    注: 0x40200000对应约定的内核启动位置 0x2800000对应20GB(KENEL_OFFSET) 0x1000对应4096个扇区(kernel_vf2.bin只有50KB, 足够大)
+# 4. 输入 "go 40200000" 启动内核
 
 # 调试目标
 .PHONY: debug
-debug: build .gdbinit
+debug: qemu .gdbinit
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
 
 # 清理目标

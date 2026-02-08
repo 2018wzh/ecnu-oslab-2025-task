@@ -20,8 +20,13 @@
 #define CLINT_MTIMECMP(hart) (CLINT_BASE + 0x4000 + 8 * (hart))
 #define CLINT_MTIME (CLINT_BASE + 0xBFF8)
 
+#ifdef VISIONFIVE2
+// 每隔INTERVAL个cycle发生一次时钟中断 (4e5个cycle大约为0.1s)
+#define INTERVAL 400000
+#else
 // 每隔INTERVAL个cycle发生一次时钟中断 (1e6个cycle大约为0.1s)
 #define INTERVAL 1000000
+#endif
 
 // 计时器
 typedef struct timer {

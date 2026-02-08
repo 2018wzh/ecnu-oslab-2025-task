@@ -1,0 +1,43 @@
+OUTPUT_ARCH( "riscv" )
+ENTRY( _entry )
+
+SECTIONS
+{
+  /* opensbi默认工作在0x80000000, 它执行完成后会跳转到0x80200000 */
+  . = 0x80200000;
+
+  .text : {
+    *(.text .text.*)
+    . = ALIGN(0x1000);
+    _trampoline = .;
+    *(trampsec)
+    . = ALIGN(0x1000);
+    ASSERT(. - _trampoline == 0x1000, "error: trampoline larger than one page");
+    PROVIDE(KERNEL_DATA = .);
+  }
+
+  .rodata : {
+    . = ALIGN(16);
+    *(.srodata .srodata.*) /* do not need to distinguish this from .rodata */
+    . = ALIGN(16);
+    *(.rodata .rodata.*)
+  }
+
+  .data : {
+    . = ALIGN(16);
+    *(.sdata .sdata.*) /* do not need to distinguish this from .data */
+    . = ALIGN(16);
+    *(.data .data.*)
+  }
+
+  .bss : {
+    . = ALIGN(16);
+    *(.sbss .sbss.*) /* do not need to distinguish this from .bss */
+    . = ALIGN(16);
+    *(.bss .bss.*)
+  }
+
+  . = ALIGN(4096);
+  PROVIDE(ALLOC_BEGIN = .);
+  PROVIDE(ALLOC_END = 0x80000000 + 128M);
+}

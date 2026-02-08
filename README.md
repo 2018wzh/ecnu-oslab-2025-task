@@ -1,18 +1,18 @@
-# LAB-9: 文件系统 之 文件管理与全系统整合
+# lab-10: 从虚拟QEMU走向真实开发板
 
 **前言**
 
-恭喜你完成了前8次实验, 来到最后一个关卡
+通过前9次实验的努力, 我们已经得到了一个较为完整的简单内核
 
-最后一个实验的内容比较多, 难度也比较大, 既是实验也是测验
+美中不足的是它目前只能在QEMU模拟的硬件环境下执行
 
-- 测验你对整个系统的理解：内存、进程、文件系统、用户态程序等
+QEMU虽然便于部署和调试, 但终究不是真实的计算机
 
-- 测验你的编码与调试能力：文件操作、路径操作、ELF解析、系统调用等
+其实, 我们的内核具备在真实开发板上运行的潜力, 只需要对最底层的组件做一些"**小小的改动**"
 
-不用担心, 助教会屏蔽大部分繁琐但不重要的工作, 并梳理实验脉络
+本次实验不会新增系统调用和测试用例, 只需要增加对**VisionFive2**(昉 星光2)开发板的支持
 
-这大概要花费你好几天时间, 现在就开始吧!
+开发板链接: https://www.starfivetech.com/site/boards
 
 ## 代码组织结构
 
@@ -24,17 +24,17 @@ ECNU-OSLAB-2025-TASK
 ├── .gdbinit.tmp-riscv xv6自带的调试配置
 ├── common.mk      Makefile中一些工具链的定义
 ├── Makefile       编译运行整个项目 (CHANGE)
-├── picture        README使用的图片目录 (CHANGE)
+├── picture        README使用的图片目录
 ├── README.md      实验指导书 (CHANGE)
 └── src            源码
     ├── kernel     内核源码
     │   ├── arch   RISC-V相关
     │   │   ├── method.h
     │   │   ├── mod.h
-    │   │   └── type.h
+    │   │   └── type.h (CHANGE, N_CPU + OpenSBI)
     │   ├── boot   机器启动
-    │   │   ├── entry.S
-    │   │   └── start.c
+    │   │   ├── entry.S (CHANGE, S-mode启动)
+    │   │   └── start.c (CHANGE, S-mode启动)
     │   ├── lock   锁机制
     │   │   ├── spinlock.c
     │   │   ├── sleeplock.c
@@ -43,364 +43,319 @@ ECNU-OSLAB-2025-TASK
     │   │   └── type.h
     │   ├── lib    常用库
     │   │   ├── cpu.c
-    │   │   ├── console.c (NEW, 行缓冲的输入输出)
-    │   │   ├── print.c (CHANGE, 在print_init中调用console_init进行初始化)
-    │   │   ├── uart.c (CHANGE, 将uart_intr中的switch-case逻辑换成cons_edit)
+    │   │   ├── console.c (TODO, 适配轮询型UART)
+    │   │   ├── print.c
+    │   │   ├── uart.c (TODO, 基于OpenSBI增加轮询型UART)
     │   │   ├── utils.c
-    │   │   ├── method.h (CHANGE)
-    │   │   ├── mod.h
-    │   │   └── type.h (CHANGE)
-    │   ├── mem    内存模块
-    │   │   ├── pmem.c (TODO, 增加函数pmem_stat用于获取剩余页面数量信息)
-    │   │   ├── kvm.c
-    │   │   ├── uvm.c (TODO, 修改uvm_heap_grow以支持flag的输入)
-    │   │   ├── mmap.c
-    │   │   ├── method.h (CHANGE)
-    │   │   ├── mod.h
-    │   │   └── type.h
-    │   ├── trap   陷阱模块
-    │   │   ├── plic.c
-    │   │   ├── timer.c
-    │   │   ├── trap_kernel.c
-    │   │   ├── trap_user.c
-    │   │   ├── trap.S
-    │   │   ├── trampoline.S
     │   │   ├── method.h
     │   │   ├── mod.h
     │   │   └── type.h
+    │   ├── mem    内存模块
+    │   │   ├── pmem.c
+    │   │   ├── kvm.c (TODO, PTE_MACHINE + OpenSBI Flush TLB + SDIO mmap)
+    │   │   ├── uvm.c
+    │   │   ├── mmap.c
+    │   │   ├── method.h
+    │   │   ├── mod.h
+    │   │   └── type.h (CHANGE, KERNLE_BASE + PTE_MACHINE)
+    │   ├── trap   陷阱模块
+    │   │   ├── plic.c (CHANGE, 增加条件编译)
+    │   │   ├── timer.c (TODO, OpenSBI改写底层)
+    │   │   ├── trap_kernel.c (TODO, 较大修改)
+    │   │   ├── trap_user.c (TODO, 较大修改)
+    │   │   ├── trap.S (CHANGE, 删除M-mode陷阱入口)
+    │   │   ├── trampoline.S
+    │   │   ├── method.h
+    │   │   ├── mod.h
+    │   │   └── type.h (CHANGE, 条件编译INTERVAL)
     │   ├── proc   进程模块
-    │   │   ├── proc.c (TODO, 增加open_file和cwd的初始化、设置、销毁逻辑)
-    │   │   ├── exec.c (TODO, 操作ELF文件以填充新的进程)
+    │   │   ├── proc.c
+    │   │   ├── exec.c
     │   │   ├── swtch.S
-    │   │   ├── method.h (CHANGE)
+    │   │   ├── method.h
     │   │   ├── mod.h
-    │   │   └── type.h (CHANGE)
+    │   │   └── type.h
     │   ├── syscall 系统调用模块
-    │   │   ├── syscall.c (TODO, 新的系统调用)
-    │   │   ├── sysfunc.c (TODO, 新的系统调用)
-    │   │   ├── method.h (TODO, 新的系统调用)
+    │   │   ├── syscall.c
+    │   │   ├── sysfunc.c
+    │   │   ├── method.h
     │   │   ├── mod.h
-    │   │   └── type.h (TODO, 新的系统调用)
+    │   │   └── type.h
     │   ├── fs     文件系统模块
     │   │   ├── bitmap.c
-    │   │   ├── buffer.c
+    │   │   ├── buffer.c (TODO, 条件编译底层IO接口)
     │   │   ├── inode.c
-    │   │   ├── device.c (TODO, 增加设备文件操作逻辑)
-    │   │   ├── dentry.c (TODO, 增加目录和路径的功能)
-    │   │   ├── fs.c (TODO, 增加文件操作逻辑)
+    │   │   ├── device.c
+    │   │   ├── dentry.c
+    │   │   ├── fs.c
     │   │   ├── virtio.c
-    │   │   ├── method.h (CHANGE)
+    │   │   ├── sdio.c (NEW, SD卡简易驱动)
+    │   │   ├── method.h (CHANGE, 增加SD卡驱动)
     │   │   ├── mod.h
-    │   │   └── type.h (CHANGE)
-    │   └── main.c
+    │   │   └── type.h (CHANGE, 增加SD卡驱动相关寄存器)
+    │   └── main.c (CHANGE, 新的初始化流程)
     ├── mkfs       磁盘映像初始化
-    │   ├── mkfs.c (CHANGE, 增加输入参数的支持)
-    │   └── mkfs.h (CHANGE)
+    │   ├── mkfs.c
+    │   └── mkfs.h (CHANGE, 考虑到SD卡的带宽比较低, disk.img从5GB改成1GB便于测试)
     ├── loader     存放链接脚本
-    │   ├── kernel.ld (CHANGE, 移动了位置)
-    │   └── user.ld (NEW, 定义了用户态ELF程序的链接规则)
+    │   ├── kernel_qemu.ld (NEW, 适配OpenSBI的QEMU模式loader)
+    │   ├── kernel_vf2.ld (NEW, 适配OpenSBI的开发板模式loader)
+    │   └── user.ld
     └── user       用户程序
-        ├── initcode.c (CHANGE, 启动测试程序)
-        ├── syscall.c (NEW, 封装了系统调用)
-        ├── help.c (NEW, 其他公共库函数)
-        ├── test_1.c (NEW, 测试点)
-        ├── test_2.c (NEW, 测试点)
-        ├── test_3.c (NEW, 测试点)
-        ├── test_4.c (NEW, 测试点)
-        ├── help.h (NEW, 库函数和重要定义)
+        ├── initcode.c
+        ├── syscall.c
+        ├── help.c
+        ├── test_1.c
+        ├── test_2.c
+        ├── test_3.c
+        ├── test_4.c
+        ├── help.h
         ├── sys.h
         ├── syscall_arch.h
-        └── syscall_num.h (CHANGE, 新的系统调用)
+        └── syscall_num.h
 ```
 
-**标记说明**
+## 第0步: 硬件准备和串口软件准备
 
-**NEW**: 新增源文件, 直接拷贝即可, 无需修改
+在开始实验前, 请提取准备如下硬件设备:
 
-**CHANGE**: 旧的源文件发生了更新, 直接拷贝即可, 无需修改
+- 1块 VisionFive2 开发板 (默认是4GB内存版本, 不需要额外配置)
 
-**TODO**: 你需要实现新功能 / 你需要完善旧功能
+- 1块 micro SD卡(TF卡) (默认容量是64GB) 和对应的读卡器 (连接主机和TF卡)
 
-## 第1步: 准备工作
+- 1个 TTL转USB的转接器 (配备若干杜邦线)
 
-1. 新建目录**src/loader/**, 将kernel.ld放到这个目录下并创建user.ld (可以比较一下它们的异同)
+- 1条 电源线 (手机充电器即可, 用于开发板供电)
 
-2. 在**src/kernel/mem/pmem.c**中实现`pmem_stat`, 用于获取当前的可用内存情况
+组装好的状态如下图所示
 
-3. 修改**src/kernel/mem/uvm.c**中的`uvm_heap_grow`, 内存区域的flag由默认的可读可写改成可输入的参数
+![pic-2](./picture/pic-2.jpg)
 
-4. 为了支持行缓冲的输入, 我们在**src/kernel/lib/console.c**中实现了控制台的抽象。它的诞生对**uart.c**和**print.c**产生了一些影响, 请你按照提示进行对应的修改
+我们还需要一个连接主机与开发板的串口软件, 请提前下载至主机:
 
-5. 阅读 **src/user/** 中的各个源文件, 理解它们的组织架构和测试流程
+推荐使用**putty** https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html
 
-6. 阅读**Makefile**和**src/mkfs/mkfs.c**, 理解各个测试程序如何写入**disk.img**
+![pic-1](./picture/pic-1.png)
 
-## 第2步: 完善文件系统 (fs)
+## 第1步: 从裸机到OpenSBI
 
-**2.1 在lab-8中实现了dentry和path的部分函数，我们先进行补全**
+从底层角度出发, 当前内核只依赖RISC-V体系结构的寄存器, 不依赖任何其他软件
+
+在QEMU上执行时这一点是可以接受的, 但是移植到物理开发板后一切将变得困难
+
+为了便于移植工作, 我们需要引入OpenSBI作为系统底层支撑的一部分 (`src/kernel/arch/type.h`)
+
+关于**OpenSBI**, 你需要知道这些事情:
+
+1. OpenSBI工作在M-mode, 负责一切需要在M-mode做的工作; 有了它之后, OS内核从启动开始一直工作在S-mode, 不存在显式的M-mode与S-mode切换, 可以简化一些复杂逻辑
+
+2. QEMU模式下: OpenSBI工作在**0x80000000-0x802000000**地址空间, 因此内核的**entry**需要调整为**0x802000000** (通过定义`KERNEL_BASE`和构建`kernel_qemu.ld`)
+
+3. 开发板模式下:  OpenSBI工作在**0x40000000-0x402000000**地址空间, 因此内核的**entry**需要调整为**0x402000000** (通过定义`KERNEL_BASE`和构建`kernel_vf2.ld`)
+
+4. 我们用到的OpenSBI包括: 串口读写、**TIMECMP**寄存器的设置、CPU核心的启动与关闭、刷新TLB
+
+## 第2步: 内核启动路径的变化
+
+我们知道, 原版的内核启动流程是: **entry.S** (M-mode) -> **start.c** (M-mode) -> **main.c** (S-mode)
+
+新版的启动流程是: **OpenSBI** (M-mode) -> **entry.S**(S-mode) -> **start.c** (S-mode) -> **main.c** (S-mode)
+
+带来的影响包括:
+
+1. 对于entry.S: 不能执行类似**csrr**的M-mode特权指令, 还是需要执行SP指针的设置和PC指针跳转到start.c
+
+2. 对于start.c: hartid不能通过寄存器读取 (M-mode特权指令), OpenSBI会将hartid作为参数传入
+
+3. 对于start.c: 不需要执行中断委托、时钟初始化、状态欺骗等, 因为OpenSBI的存在简化了这些工作, 此时就是S-mode
+
+4. 对于main.c: 核心的变化是只有一个CPU核心会自启动, 其他CPU核心都需要手动唤醒; 此外, 流程中增加了SDIO的初始化和测试
+
+**关于VisionFive2开发板的CPU核心说明**:
+
+VisionFive2开发板的CPU核心结构是1+4, 其中hart[0]负责系统监控, hart[1-4]真正执行内核程序和用户程序
+
+因此, 我们需要将`N_CPU`定义为5, 但是启动CPU核心时忽略hart[0]
+
+**另一件需要关注的事情: 条件编译**
+
+我们希望能兼容QEMU和VisionFive2, 因此在编译`kernel_vf2.elf`时声明了`CFLAGS += -DVISIONFIVE2`
 
 ```c
-// in dentry.c
-uint32 dentry_search_2(inode_t *ip, uint32 inode_num, char *name); // 基于inode_num搜索name
-uint32 dentry_transmit(inode_t *ip, uint64 dst, uint32 len, bool is_user_dst); // 传输有效目录项
-uint32 inode_to_path(inode_t *ip, char *path, uint32 len); // 与__path_to_inode相反的解析过程
-inode_t* path_create_inode(char *path, uint16 type, uint16 major, uint16 minor); // 创建新的inode
-uint32 path_link(char *old_path, char *new_path); // 建立硬链接
-uint32 path_unlink(char *path); // 解除硬链接
+// src/kernel/main.c
+
+#ifdef VISIONFIVE2
+        sdio_disk_init(); // 只在VF2模式下被编译
+        sdio_disk_test(); // 只在VF2模式下被编译
+#else
+        virtio_disk_init(); // 只在QEMU模式下被编译
+#endif
 ```
 
-前两个函数相对简单, 你可以参考之前实现的`dentry_search`和`dentry_print`来做, 核心操作都是目录项遍历
+你可以用类似的方法决定哪些代码只在QEMU模式下被编译, 哪些代码只在VISIONFIVE2模式下被编译, 后面会经常用到
 
-`inode_to_path`相对复杂, 它的作用是获取某个inode(目录类型)的绝对路径, 也就是从某个节点开始回溯到树根节点
+## 第3步: 重构时钟系统
 
-我们知道, 正向查找 (`path_to_inode`) 的理论依据是`dentry_search`操作进行文件名匹配
+引入OpenSBI后可以明显简化时钟和时钟中断处理逻辑, 因此我们需要重构时钟系统
 
-对应的, 逆向查找 (`inode_to_path`) 的理论依据是之前埋好的`..`目录项, 它对应的inode_num就是上级节点的inode_num
-
-注意: 由于采用逆向填充方法, 所以缓冲区的使用也是从后往前的, 返回偏移量 (**path + offset**才是绝对路径字符串的起点)
-
-下一个需要实现的函数是`path_create_inode`, 它基于目标路径来创建新的inode, 包括inode的申请和目录项的创建等
-
-在之前的假设中, 一个inode只对应一个绝对路径, 这可能带来一些不方便:
-
-假设一个你经常使用的文件处于很深的绝对路径中, 打开它就变得麻烦了
-
-为了解决这个问题, 我们引入了硬链接的方法: 一个inode可以对应多个绝对路径 
-
-/AAA/BBB/CCC/DDD/hello.txt 对应 inode-23, /link.txt 也对应 inode-23
-
-实现这一点只需要做两件事: (1) inode-23.nlink++ (2) 在根目录下增加一条dentry {link.txt, 23}
-
-对应的, unlink操作也完成两件事: (1) inode.nlink-- (2) 删除一条dentry
-
-它还需要考虑一个问题: inode的资源释放 (当nlink减到0, 意味着用户无法通过路径方法访问这个inode, 需要在磁盘中释放它)
-
-资源释放的判断逻辑, 我们在`inode_put`中已经实现了, 这里不必显式执行`inode_delete`操作
-
-理解这些部分后, 请你动手实现 `path_link` 与 `path_unlink`
-
-**2.2 补全了dentry.c中的函数后, 我们正式引入文件的抽象**
-
-你可能听过一句话: Linux秉持一切皆文件的设计哲学; 下面详细讨论"文件"的定义与实现方法
+核心是两个寄存器: **TIME** (稳定+1) + **TIMECMP** (与TIME比较)
 
 ```c
-typedef struct file {
-    inode_t *ip;        // 对应的inode
-    bool readable;      // 是否可读
-    bool writbale;      // 是否可写
-    uint32 offset;      // 读/写指针的偏移量
-    uint32 ref;         // 引用数 (lk_file_table保护)
-} file_t;
+// src/kernel/trap/timer.c
 
-file_t file_table[N_FILE]; // 文件资源池
-spinlock_t lk_file_table; // 保护它的锁
+// 获取TIME寄存器的值, 以知晓自启动以来过了多少个CPU周期
+asm volatile("rdtime %0" : "=r"(cycles));
 
+// 设置TIMECMP寄存器, 以初始化时钟和保证下一次时钟中断能被触发
+SBI_SET_TIMER(timer_get_cycles() + INTERVAL);
 ```
 
-除了inode指针, 文件还包括读写权限字段、读写指针偏移量字段、引用数字段
+OpenSBI的存在使得设置**TIMECMP**的值变得很简单, 我们不再需要`timer_init`和`timer_vector`
 
-其中读写权限字段在文件开始时设置、偏移量字段在文件读写时设置、引用数字段在文件打开关闭复制时设置
+其他需要注意的细节:
 
-值得注意的是, 不同于inode、buffer等全局共享资源; 对于进程来说, 文件提供了一种独占inode资源的假象
+1. 由于QEMU和VisionFive2开发板的CPU频率不同, 因此**INTERVAL**的设置也有区别, 保证大约0.1s触发1次时钟中断
 
-文件的读写权限、指针偏移量等, 只有持有这个文件的进程关心, 无需上锁; 而引用数需要全局的lk_file_table保护
+2. 时钟需要先执行一次`SBI_SET_TIMER`才能完成激活, 在`trap_kernel_inithart`中做这件事
 
-我们可以梳理一下file与inode的区别: 
+3. 每个CPU核心都有自己的时钟中断要处理 (更新TIMECMP), 但是只有被选定的CPU核心需要更新全局的时间 (更新sys_timer.ticks)
 
-- file是进程私有的、具备动态语义的、字段不做持久化存储的 数据集合管理者
+## 第4步: 重构串口系统
 
-- inode是全局共享的、只有静态语义的、字段进行持久化存储的 数据集合管理者
+移植到开发板后, 原来实现的UART驱动无法工作, 好在OpenSBI提供了便捷的字符读写接口
 
-理解上述概念后, 请你实现一系列文件相关的函数
+你需要利用条件编译, 在不破坏原来UART驱动的前提下, 使得`uart_getc_sync`和`uart_putc_sync`变得可用
 
 ```c
-// in fs.c
-void file_init(); // 初始化file_table和锁
-file_t* file_alloc(); // 获取空闲file
-file_t* file_open(char *path, uint32 open_mode); // 打开文件(注意打开模式)
-void file_close(file_t *file); // 关闭文件
-uint32 file_read(file_t* file, uint32 len, uint64 dst, bool is_user_dst); // 读取文件
-uint32 file_write(file_t* file, uint32 len, uint64 src, bool is_user_src); // 写入文件
-uint32 file_lseek(file_t *file, uint32 lseek_offset, uint32 lseek_flag); // 读写指针移动
-file_t* file_dup(file_t* file); // 复制文件使用权
-uint32 file_get_stat(file_t* file, uint64 user_dst); // 获取文件状态
+// src/kernel/arch/type.h
+
+// 阻塞式: 直到字符被成功输出到串口才会返回
+#define SBI_PUTCHAR(ch) SBI_LEGACY_ECALL(SBI_LEGACY_PUTCHAR_NUM, ch, 0, 0)
+
+// 非阻塞式: 如果没有读到字符，会直接返回255; 如果读到字符则返回字符(char)
+#define SBI_GETCHAR() SBI_LEGACY_ECALL(SBI_LEGACY_GETCHAR_NUM, 0, 0, 0)
 ```
 
-在实现这些函数的过程中, 你应该注意到: `file_read` 和 `file_write` 需要用到swich-case做分类处理
+需要提醒的事情: VisionFive2模式下, UART不需要初始化和进行中断响应
 
-file type 与 inode type 是匹配的, 分成: 数据文件(流式)、目录文件（结构化）、设备文件（特殊定义）
+完成UART层的工作后, 请你修改`src/kernel/lib/console.c`以对接底层
 
-**2.3 数据文件和目录文件我们比较熟悉了, 下面重点介绍设备文件的情况**
+由于OpenSBI提供的字符读写接口不采用中断模式, 因此对`cons_read`和`cons_edit`会产生影响
 
-在我们的设计中, 设备文件的分类只使用主设备号**inode->major**, 次设备号都使用**default**
+## 第5步: 增加SDIO驱动
 
-设备文件的核心特性是支持**读写**操作, 不同于另外两种文件的读写都是在磁盘上进行的
-
-设备文件的读写操作是可以灵活定义的, 我们定义了六种设备文件:
-
-- **/dev/stdin**: 标准输入 (行缓冲), 可读
-
-- **/dev/stdout**: 标准输出, 可写
-
-- **/dev/stderr**: 标准错误输出 (前置输出“ERROR”), 可写
-
-- **/dev/zero**: 零文件 (可以读到任意多的零字节), 可读
-
-- **/dev/null**: 黑洞文件 (读到的字节数永远是0, 写入多少字节都可以), 可读可写
-
-- **/dev/gpt0**: 小彩蛋 (可以回答预设问题的笨蛋版本GPT), 可写
-
-这六种设备文件的读写函数已经给出, 你需要实现下面的功能:
+VIRTIO 是QEMU虚拟磁盘的驱动程序, 向上对接Buffer层, 它的核心接口包括
 
 ```c
-// in device.c
-void device_init(); // 初始化device_table, 保证各个设备文件/dev/xxx在磁盘中存在
-bool device_open_check(uint16 major, uint32 open_mode); // 检查设备文件是否存在及打开权限的合法性
-uint32 device_read_data(uint16 major, uint32 len, uint64 dst, bool is_user_dst); // 读接口
-uint32 device_write_data(uint16 major, uint32 len, uint64 src, bool is_user_src); // 写接口
+void virtio_disk_init();
+void virtio_disk_rw(buffer_t *b, bool write);
+void virtio_disk_intr();
 ```
 
-注意: `device_init`和`file_init`应该在`fs_init`中被调用
-
-## 第3步: 进程与文件系统 (proc/proc.c)
-
-完成文件系统的补全工作后, 我们进一步讨论进程模块与文件系统模块的协作
-
-首先在进程结构体中增加打开文件表字段`open_file`和当前工作目录字段`cwd`
-
-前者记录当前进程打开的文件指针, 后者记录了当前进程**站在**文件系统树中的哪个位置
-
-我们需要修改哪些地方以支持这两个字段的生命周期呢?
-
-- `proc_init`: 初始化资源(设为NULL)
-
-- `proc_return`: 对于新生的proczero, 手动设置open_file(依次打开stdin stdout stderr)和cwd(设为根目录)
-
-- `proc_fork`: 对于其他进程, 直接继承父进程的open_file和cwd即可(file_dup + inode_dup)
-
-- `proc_free`: 释放资源(设为NULL)
-
-和我们之前说的一样, 你会发现文件的生命周期与进程的生命周期是高度吻合的
-
-支持cwd字段使得相对路径 (如./hello.txt or hello.txt or ../hello.txt) 变得可能 (区别于以`/`开头的绝对路径)
-
-对应的, 请你修改路径解析函数 `__path_to_inode` 以支持基于相对路径搜索inode
-
-## 第4步: 执行ELF文件 (proc/exec.c)
-
-首先思考一下只有fork的OS内核是什么样的?
-
-我们实现了initcode.c, 其他进程通过fork产生, 内容上和proczero没什么区别...
-
-为了实现丰富多彩的用户软件, 只有fork是不够的, 我们还要有执行ELF文件的能力
-
-ELF文件编译链接的最终产物, OS内核读取和解析ELF文件, 在复制品的壳子上构建全新的血肉 (fork + exec)
-
-ELF文件的组织结构通常是: [ELF_header | Programe_header | seg-1 | seg-2 | ... | Section_header]
-
-其中ELF_header描述了全局的情况 (类似Superblock), Programe_header描述了各个segment的情况 (类似inode region)
-
-接下来我们讨论如何实现非常重要的函数`proc_exec`
-
-- step-0: 准备全新的pagetable和trapframe (为了防止中途崩溃, 我们不能直接修改旧的)
-
-- step-1: 解析输入的文件路径, 获取ELF文件的inode
-
-- step-2: 读取ELF_header, 其中**对Programe_header的描述字段**和**ELF程序入口地址**是我们关心的
-
-- step-3: 按照顺序读取需要载入内存的Segment, 填充到用户堆区域 (`prepare_heap`)
-
-- step-4: 释放ELF的inode
-
-- step-5: 处理输入的参数列表**argv**, 填充到用户栈区域 (`prepare_stack`)
-
-- step-6: 新的地址空间构建完毕, 可以释放旧的资源了
-
-- step-7: 设置trapframe的相关字段: 返回用户态的参数1(argc)、参数2(argv)、PC指针、SP指针
-
-- step-8: 更新进程的相关字段: 页表、trapframe、heap_top、ustack_npage、mmap、name
-
-助教将比较麻烦的`load_segment` `prepare_heap` `prepare_stack` 剥离出来并实现了, 你只需完成主线任务
-
-这个函数的复杂性大概是OS内核中最高的, 横跨进程、内存、文件系统三大核心模块, 需要你非常细心并充分理解每个步骤
-
-## 第5步: 增加系统调用 (syscall)
-
-为了便于在用户态进行系统测试, 你需要先实现一些新的系统调用, 主要是文件系统相关的 (9-22)
-
-这是最新的系统调用表, 你需要参考它修改**syscall.c**与**sysfunc.c**中的缺漏
-
-更多输入输出细节请参考**sysfunc.c**中各个系统调用函数的注释
+类似的, VisionFive2环境下"磁盘"其实就是TF卡, 我们需要一套SDIO的驱动来提供类似的对上接口
 
 ```c
-#define SYS_brk 1               // 调整堆边界
-#define SYS_mmap 2              // 创建内存映射
-#define SYS_munmap 3            // 解除内存映射
-#define SYS_fork 4              // 进程复制
-#define SYS_wait 5              // 等待子进程退出
-#define SYS_exit 6              // 进程退出
-#define SYS_sleep 7             // 进程睡眠一段时间
-#define SYS_getpid 8            // 获取当前进程的ID
-#define SYS_exec 9              // 执行ELF文件
-#define SYS_open 10             // 打开文件
-#define SYS_close 11            // 关闭文件
-#define SYS_read 12             // 读取文件
-#define SYS_write 13            // 写入文件
-#define SYS_lseek 14            // 移动读写指针
-#define SYS_dup 15              // 复制文件权限
-#define SYS_fstat 16            // 获取文件状态信息
-#define SYS_get_dentries 17     // 获取目录下所有有效目录项
-#define SYS_mkdir 18            // 创建目录文件
-#define SYS_chdir 19            // 切换工作目录
-#define SYS_print_cwd 20        // 打印工作目录的绝对路径
-#define SYS_link 21             // 建立硬链接
-#define SYS_unlink 22           // 解除硬链接
+void sdio_disk_init();
+void sdio_disk_rw(buffer_t *b, bool write);
+void sdio_disk_test();
 ```
+
+要想让驱动程序工作起来, 首先需要在`kvm_init`中增加相关内存映射 (映射区域大小建议设为0x10000)
+
+请利用条件编译修改`src/kernel/fs/buffer.c`中的buffer读写函数, 来对应对接的驱动程序
+
+你不需要完全理解SDIO的驱动原理, 只需要知道它和VIRTIO的最大区别是不采用"中断"模式, 而是忙等
+
+## 第6步: 修改陷阱逻辑
+
+回忆一下, 中断相关的处理分支包括: UART、VIRTIO、Timer
+
+经过第3、4、5步的修改后:
+
+- **UART和VIRTIO**被替换成了不采用中断模式的**OpenSBI接口和SDIO**, 你可以用条件编译的方法使得相关代码不工作
+
+- **Timer**从原来的**M-mode修改TIMECMP寄存器后产生S-mode软件中断**变成了简单的**产生S-mode时钟中断**
+
+请你修改`plic.c` `trap_kernel.c` `trap_user.c`的相关代码以适应这些变化
+
+## 第7步: 修改页表项相关代码
+
+`kvm.c`中, 除了之前提到的地址空间映射问题, 硬件移植还需要注意**PTE**相关代码
+
+主要要求包括:
+
+- 执行`vm_mappages`时, 需要对PTE进行赋值修改, 在原来的基础上还需要 `set dirty bit and access bit`
+
+- 执行`vm_getpte`时, 一种分支情况是申请新的页面来扩充页表, 这时需要使用OpenSBI刷新TLB
+
+- 类似的, 执行`vm_mappages`和`vm_unmappages`时, 修改PTE后也需要使用OpenSBI刷新TLB
+
+## 第8步: 编译和烧录
+
+纵观前面的7个步骤, 可以发现开发板移植涉及到修改主要集中在底层基础设施, 包括:
+
+- 机器启动过程: entry.S -> start.c -> main.c
+
+- 硬件相关: UART、SDIO、Timer
+
+- 核心机制: 陷阱处理、内存映射、页表项更新
+
+对于系统上层的进程管理、文件系统、内存管理几乎没有改动, 这就是前文提到的**我们的内核具备开发板移植潜力**
+
+**接下来, 请将注意力放到Makefile, 理解我们对SD卡做了什么:**
+
+- QEMU模式: make qemu (编译) + make run (执行)
+
+- VisionFive2模式: make vf2 (编译) + make sdcard (烧录启动用的SD卡)
+
+烧录执行前请先插入没有重要文件的SD卡, 如果SD卡自动挂载了请先解除挂载 (umount)
+
+可以用**lsblk**命令查看设备状态, Makefile默认的SD卡设备路径是/dev/sdb, 请根据实际情况调整 
+
+烧录命令是`dd`, 它是一种字节级(而非文件级)的写入命令
+
+烧录完成后SD卡的空间布局是: [disk.img] [一段空闲空间] [kernel_vf2.bin] [一段空闲空间]
+
+其中**disk.img**的起始地址为0, **kernel_vf2.bin**的起始地址为20GiB (假设SD卡容量大于等于32GiB)
+
+## 第9步: 上板执行
+
+1. 按照图示方法, 使用杜邦线连接转换器与开发板的GPIO接口 (注意RX对TX), 将转换器插入主机
+
+![pic-3](./picture/pic-3.png)
+
+2. 打开设备管理器, 在**端口**目录下确认串口的设备号, 图示为COM6 (以你看到的为准)
+
+![pic-4](./picture/pic-4.png)
+
+3. 运行putty.exe, 选择Connection Type为Serial, 填写设备号(COM6) 和时钟频率 (115200)
+
+![pic-5](./picture/pic-5.png)
+
+4. 插入SD卡, 连接电源线, 以**1-bit QSPI Nor Flash**模式 (默认) 启动开发板
+
+![pic-6](./picture/pic-6.png)
+
+![pic-7](./picture/pic-7.png)
+
+5. 正常情况应该看到如下输出, 如果输出异常或没有反应可以尝试两次点击开关按钮or插拔电源线重启
+
+![pic-8](./picture/pic-8.png)
+
+6. 此时进入了一种类似Shell的状态, 你需要依次输入以下命令 (具体含义见Makefile注释):
+
+  - `mmc dev 1`
+
+  - `mmc read 0x40200000 2800000 1000`
+
+  - `go 0x40200000`
+
+7. 一切顺利的话你会看到内核启动, 进入测试点; 至此, 移植工作完成!
+
+![pic-8](./picture/pic-9.png)
 
 ## 测试用例
 
-实现`proc_exec`对系统调用的测试有很大帮助, 现在的测试流程是:
+你可以沿用lab-9提供的四个测试用例
 
-**initcode.c -> (fork + exec + wait) -> test_1 or test_2 or test_3 ...**
-
-你只需要修改`initcode.c`中的**path**和**argv**参数即可启动不同的测试点
-
-助教准备了4个测试用例 (在`src/user`目录中), 请你依次执行, 理想结果见`picture/`目录
-
-**尾声**
-
-**历经9次实验, 我们终于完成了这个小型操作系统内核的全部工作, 祝贺!**
-
-它的代码量大约5500行, 由内核态程序、用户态程序、文件系统初始化程序、链接脚本四部分构成
-
-**我们先来回顾一下9次实验的内容:**
-
-- lab 1: 机器启动  
-- lab 2: 内存管理初步  
-- lab 3: 中断异常初步  
-- lab 4: 第一个用户态进程的诞生
-- lab 5: 系统调用流程建立+用户态虚拟内存管理
-- lab 6: 从单进程走向多进程--进程调度与生命周期
-- lab 7: 文件系统 之 磁盘管理  
-- lab 8: 文件系统 之 数据组织与层次结构  
-- lab 9: 文件系统 之 文件管理与全系统整合  
-
-**这9次实验大致可以划分成3个阶段:**
-
-- lab 1-3: 构建OS内核的基础设施, 例如串口、自旋锁、物理页、页表、中断异常等  
-- lab 4-6: 按照“从一到多,从弱到强”的顺序构建进程模块, 并与内存模块、陷阱模块深度绑定  
-- lab 7-9: 引入持久化存储概念, 自底向上构建文件系统模块, 并与进程模块深度绑定  
-
-助教希望能帮你梳理系统构建的底层逻辑, 并带领你一步步来做; 但是受限于能力和精力, 难免有所缺漏, 请多包涵
-
-经过这样的动手过程, 相信你对小型OS内核已经建立起了基本概念; 请记住, **这是起点而非终点**
-
-**如果你想进一步完善和改进这个基础版本的OS内核, 我们提供了一些方向:**
-
-- **内存管理**: (1) 实现更完善的缺页异常和写时拷贝机制; (2) 实现伙伴系统分配器
-- **进程管理**: (1) 实现多级反馈调度算法来替换现有的轮询式调度; (2) 实现内核态线程机制
-- **文件系统**: (1) 修改现有的mmap机制, 实现文件映射能力; (2) 实现基于FAT的文件系统, 构建VFS层
-- **用户程序**: (1) 实现一个好用的shell程序; (2) 补充更多实用程序(如ls、cd、cat等)
-- **硬件适配**: (1) 从仿真的QEMU移植到物理的开发板; (2) 支持更多体系结构（如x86、ARM、LoongArch等）
-
-**这个你亲手完成的小型OS内核, 将成为操作系统研究道路上的第一块砖, 支撑你走得更远!**
+助教建议你增加时钟、进程、内存等模块的测试用例以确保你的内核在开发板上正常工作

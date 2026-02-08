@@ -39,7 +39,11 @@ typedef struct alloc_region
 */
 
 // 内核基地址
-#define KERNEL_BASE 0x80000000ul
+#ifdef VISIONFIVE2
+#define KERNEL_BASE 0x40200000ul
+#else
+#define KERNEL_BASE 0x80200000ul
+#endif
 
 // from kernel.ld
 extern char KERNEL_DATA[];
@@ -112,6 +116,12 @@ typedef pte_t* pgtbl_t;
 #define PTE_G (1 << 5) // global
 #define PTE_A (1 << 6) // accessed
 #define PTE_D (1 << 7) // dirty
+
+#ifdef VISIONFIVE2
+#define PTE_MACHINE (PTE_A | PTE_D)
+#else
+#define PTE_MACHINE 0
+#endif
 
 // 检查一个PTE是否属于pgtbl
 #define PTE_CHECK(pte) (((pte) & (PTE_R | PTE_W | PTE_X)) == 0)
